@@ -159,3 +159,76 @@ class ExtractorAgent:
 
         files.sort(key=priority)
         return files[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# LLM-based semantic file selector (paper §3.1 — Extractor Agent with LLaMA-3)
+# ---------------------------------------------------------------------------
+
+_EXTRACTOR_PROMPT = """\
+You are the Extractor Agent in the LAMPS malicious-package detection pipeline.
+
+Given the list of Python files in package '{package}', select ONLY the files \
+that should be analysed for potential malicious behaviour.
+
+Rules:
+- KEEP: setup.py, __init__.py, main modules, utility modules, any file that \
+could contain installation-time or import-time code execution.
+- EXCLUDE: test files (test_*.py, *_test.py), documentation scripts, \
+configuration-only files, migration files, generated code.
+
+Respond with a JSON array of file paths to keep, e.g.:
+["setup.py", "mypackage/__init__.py", "mypackage/utils.py"]
+
+Files in package '{package}':
+{file_list}
+"""
+
+
+class LLMExtractorAgent:
+    """Extractor Agent backed by an LLM for semantic file selection (paper §3.1).
+
+    Falls back to rule-based filtering when the LLM response cannot be parsed.
+    """
+
+    def __init__(self, llm: object) -> None:
+        self.llm = llm
+
+    def _call_llm(self, prompt: str) -> str:
+        if hasattr(self.llm, "generate"):
+            return self.llm.generate(prompt).text
+        if callable(self.llm):
+            return self.llm(prompt)
+        if hasattr(self.llm, "run"):
+            return self.llm.run(prompt)
+        raise TypeError("Unsupported LLM interface")
+
+    def filter(
+        self,
+        package: str,
+        files: list["ExtractedFile"],
+    ) -> list["ExtractedFile"]:
+        """Use the LLM to select relevant files from ``files``."""
+        import json, re
+
+        if not files:
+            return files
+
+        file_list = "\n".join(f"- {f.rel_path}" for f in files)
+        prompt = _EXTRACTOR_PROMPT.format(package=package, file_list=file_list)
+
+        try:
+            raw = self._call_llm(prompt)
+            # Extract JSON array from response
+            match = re.search(r"\[.*?\]", raw, re.DOTALL)
+            if match:
+                selected_paths = set(json.loads(match.group(0)))
+                filtered = [f for f in files if f.rel_path in selected_paths]
+                if filtered:
+                    return filtered
+        except Exception:
+            pass
+
+        # Fallback: rule-based
+        extractor = ExtractorAgent()
+        return [f for f in files if extractor._is_relevant(Path(f.rel_path))]
