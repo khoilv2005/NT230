@@ -1,0 +1,24 @@
+# Core ML
+torch>=2.0
+transformers>=4.36
+accelerate
+einops
+
+# Multi-agent + LLM
+crewai>=0.30
+google-genai
+
+# Data
+pandas
+numpy
+scikit-learn
+scipy
+
+# Network / utilities
+requests
+tqdm
+psutil
+
+# Plotting
+matplotlib
+seaborn

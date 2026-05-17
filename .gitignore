@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Dataset & generated data (large files, not committed)
+/data/
+/downloads/
+/extracted/
+/results/
+/Dataset/
+# Model checkpoints (large binary files)
+/models/codebert-malware-detector/saved_models/
+/models/codebert-malware-detector/data/train.jsonl
+/models/codebert-malware-detector/data/val.jsonl
+/models/codebert-malware-detector/data/test.jsonl
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
