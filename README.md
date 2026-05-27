@@ -11,10 +11,10 @@ LAMPS coordinates four role-specialised agents through CrewAI:
 
 | Agent | Backend | Responsibility |
 |---|---|---|
-| Fetcher | LLaMA-3 / Gemini Flash | Resolve PyPI metadata and download the source archive |
-| Extractor | LLaMA-3 / Gemini Flash | Unpack the archive and select the relevant `.py` files |
+| Fetcher | PyPI JSON API | Resolve PyPI metadata and download the source archive |
+| Extractor | Ollama Cloud (`deepseek-v4-flash:cloud`) | Unpack the archive and select the relevant `.py` files |
 | Classifier | Fine-tuned CodeBERT | Per-file binary malicious / benign decision |
-| Verdict | LLaMA-3 / Gemini Flash | Conservative package-level aggregation + rationale |
+| Verdict | Ollama Cloud (`deepseek-v4-flash:cloud`) | Conservative package-level aggregation + rationale |
 
 ## Repository layout
 
@@ -23,7 +23,7 @@ src/lamps/                       Modular Python package
 ├── agents/                      4 LAMPS agents (fetcher / extractor / classifier / verdict)
 ├── data/                        D1 / D2 dataset preparation
 ├── evaluation/                  Metrics
-├── llms/                        Gemini wrapper (used by reasoning agents)
+├── llms/                        Ollama Cloud wrapper for reasoning agents
 ├── models/                      CodeBERT inference wrapper
 ├── pipeline.py                  End-to-end LAMPS pipeline
 └── config.py                    Centralised paths and hyperparameters
@@ -49,18 +49,15 @@ pip install -e .
 pip install -r requirements.txt
 ```
 
-Set credentials for the reasoning agents (Verdict rationale generation only):
+Set credentials for Ollama Cloud reasoning agents:
 
 ```powershell
-$env:GEMINI_API_KEY = "<your-api-key>"
-# Or, with Vertex AI:
-gcloud auth application-default login
-$env:GOOGLE_GENAI_USE_VERTEXAI = "True"
-$env:GOOGLE_CLOUD_PROJECT = "<your-project-id>"
+$env:OLLAMA_API_KEY = "<your-api-key>"
+$env:OLLAMA_MODEL = "deepseek-v4-flash:cloud"
 ```
 
 The Verdict Agent runs without an LLM by default and produces a deterministic
-rationale; pass `--explain` to enable Gemini-generated explanations.
+rationale; pass `--explain` to enable Ollama Cloud-generated explanations.
 
 ## Reproduce the experiments
 
@@ -110,10 +107,14 @@ predictions.
 python hybrid_pypi_classifier.py --package requests
 python hybrid_pypi_classifier.py --package requests --version 2.31.0 --explain
 python hybrid_pypi_classifier.py --package requests --json
+python hybrid_pypi_classifier.py --package requests --crewai --json --crew-json
 ```
 
-This fetches the source archive from PyPI, extracts every Python file,
-classifies them, and prints the conservative package-level verdict.
+This fetches the source archive from PyPI, extracts Python files, classifies
+them, and prints the conservative package-level verdict. Pass `--crewai` to use
+the paper-aligned full pipeline: Fetcher -> Ollama-backed Extractor ->
+CodeBERT Classifier -> Ollama-backed Verdict. The CrewAI wrapper defines the
+four CrewAI roles and tasks and records an auditable execution trace.
 
 ## Citation
 

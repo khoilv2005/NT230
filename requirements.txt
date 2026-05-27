@@ -7,6 +7,7 @@ einops
 # Multi-agent + LLM
 crewai>=0.30
 google-genai
+ollama
 
 # Data
 pandas

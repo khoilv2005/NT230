@@ -9,7 +9,7 @@ Example::
 
     python hybrid_pypi_classifier.py --package requests
     python hybrid_pypi_classifier.py --package requests --version 2.31.0
-    python hybrid_pypi_classifier.py --package requests --explain --json
+    python hybrid_pypi_classifier.py --package requests --crewai --json --crew-json
 """
 
 from __future__ import annotations
@@ -22,34 +22,59 @@ from pathlib import Path
 # Allow running as a script without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from lamps.agents.classifier import ClassifierAgent
-from lamps.agents.extractor import ExtractorAgent
-from lamps.agents.fetcher import FetcherAgent
-from lamps.agents.verdict import VerdictAgent
 from lamps.config import CODEBERT_BEST_CKPT
-from lamps.pipeline import LampsPipeline
+from lamps.llms.ollama_client import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
+from lamps.llms.ollama_client import OLLAMA_CLOUD_HOST
 from lamps.utils import configure_logging, logger
 
 
-def build_pipeline(checkpoint: Path, explain: bool) -> LampsPipeline:
+def build_ollama_cloud(model: str, host: str = OLLAMA_CLOUD_HOST):
+    """Create the Ollama Cloud client used by LAMPS reasoning agents."""
+    from lamps.llms.ollama_client import OllamaClient
+
+    return OllamaClient(model=model, host=host)
+
+
+def build_pipeline(
+    checkpoint: Path,
+    explain: bool,
+    use_crewai: bool = False,
+    ollama_model: str = OLLAMA_DEFAULT_MODEL,
+    ollama_host: str = OLLAMA_CLOUD_HOST,
+):
     """Wire up the four agents into a runnable pipeline."""
+    from lamps.agents.classifier import ClassifierAgent
+    from lamps.agents.extractor import ExtractorAgent, LLMArchiveExtractorAgent
+    from lamps.agents.fetcher import FetcherAgent
+    from lamps.agents.verdict import VerdictAgent
+    from lamps.crewai_pipeline import LampsCrewPipeline
+    from lamps.pipeline import LampsPipeline
+
     fetcher = FetcherAgent()
-    extractor = ExtractorAgent()
     classifier = ClassifierAgent(checkpoint=checkpoint)
 
-    if explain:
-        from lamps.llms import GeminiClient
-
-        verdict = VerdictAgent(llm=GeminiClient())
+    if use_crewai:
+        llm = build_ollama_cloud(model=ollama_model, host=ollama_host)
+        extractor = LLMArchiveExtractorAgent(llm=llm)
+        verdict = VerdictAgent(llm=llm)
+    elif explain:
+        llm = build_ollama_cloud(model=ollama_model, host=ollama_host)
+        extractor = ExtractorAgent()
+        verdict = VerdictAgent(llm=llm)
     else:
+        extractor = ExtractorAgent()
         verdict = VerdictAgent(llm=None)
 
-    return LampsPipeline(
+    pipeline_cls = LampsCrewPipeline if use_crewai else LampsPipeline
+    pipeline = pipeline_cls(
         fetcher=fetcher,
         extractor=extractor,
         classifier=classifier,
         verdict=verdict,
     )
+    if use_crewai:
+        pipeline.crew = pipeline.build_crew()
+    return pipeline
 
 
 def render_human(result) -> str:
@@ -83,26 +108,58 @@ def main() -> int:
     parser.add_argument(
         "--explain",
         action="store_true",
-        help="Use the Gemini-backed Verdict Agent to generate a natural-language "
-        "rationale (requires GEMINI_API_KEY).",
+        help="Use Ollama Cloud for Verdict Agent rationale (requires OLLAMA_API_KEY).",
     )
     parser.add_argument(
         "--json",
         action="store_true",
         help="Emit the verdict as a JSON object instead of human-readable text.",
     )
+    parser.add_argument(
+        "--crewai",
+        action="store_true",
+        help="Use the CrewAI-backed full pipeline with Ollama Cloud Extractor/Verdict.",
+    )
+    parser.add_argument(
+        "--crew-json",
+        action="store_true",
+        help="Include the CrewAI-style execution trace in JSON output.",
+    )
+    parser.add_argument(
+        "--ollama-model",
+        default=OLLAMA_DEFAULT_MODEL,
+        help="Ollama model for reasoning agents.",
+    )
+    parser.add_argument(
+        "--ollama-host",
+        default=OLLAMA_CLOUD_HOST,
+        help="Ollama host. Default is Ollama Cloud.",
+    )
     args = parser.parse_args()
 
     configure_logging()
 
-    pipeline = build_pipeline(args.checkpoint, explain=args.explain)
+    pipeline = build_pipeline(
+        args.checkpoint,
+        explain=args.explain,
+        use_crewai=args.crewai,
+        ollama_model=args.ollama_model,
+        ollama_host=args.ollama_host,
+    )
     logger.info("Analysing package %s%s", args.package, f"=={args.version}" if args.version else "")
     result = pipeline.analyze_package(args.package, version=args.version)
 
     if args.json:
-        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        payload = result.to_dict()
+        if args.crew_json and getattr(pipeline, "last_execution", None) is not None:
+            payload["crew_execution"] = pipeline.last_execution.to_dict()
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(render_human(result))
+        if args.crewai and getattr(pipeline, "last_execution", None) is not None:
+            print("\nCrewAI execution trace:")
+            for step in pipeline.last_execution.steps:
+                print(f"  - {step.agent}: {step.action}")
 
     # Exit code: 0 = analysis succeeded (regardless of verdict).
     return 0

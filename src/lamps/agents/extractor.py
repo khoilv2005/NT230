@@ -232,3 +232,26 @@ class LLMExtractorAgent:
         # Fallback: rule-based
         extractor = ExtractorAgent()
         return [f for f in files if extractor._is_relevant(Path(f.rel_path))]
+
+class LLMArchiveExtractorAgent:
+    """Archive extractor plus Ollama/LLM semantic file selection.
+
+    Live full-pipeline mode needs an ``extract(archive_path, package)`` method,
+    while the paper's Extractor Agent also performs semantic filtering through
+    an LLM. This adapter composes the deterministic archive unpacker with
+    :class:`LLMExtractorAgent` so the pipeline remains:
+
+    Fetcher -> Extractor(Ollama semantic filter) -> Classifier -> Verdict.
+    """
+
+    def __init__(
+        self,
+        llm: object,
+        base_extractor: Optional[ExtractorAgent] = None,
+    ) -> None:
+        self.base_extractor = base_extractor or ExtractorAgent()
+        self.selector = LLMExtractorAgent(llm=llm)
+
+    def extract(self, archive_path: Path, package: str) -> list[ExtractedFile]:
+        files = self.base_extractor.extract(archive_path, package)
+        return self.selector.filter(package, files)
