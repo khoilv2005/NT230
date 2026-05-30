@@ -48,6 +48,7 @@ def build_pipeline(
     from lamps.agents.fetcher import FetcherAgent
     from lamps.agents.verdict import VerdictAgent
     from lamps.crewai_pipeline import LampsCrewPipeline
+    from lamps.llms.crewai_router import CrewAIToolRouterLLM
     from lamps.pipeline import LampsPipeline
 
     fetcher = FetcherAgent()
@@ -66,12 +67,15 @@ def build_pipeline(
         verdict = VerdictAgent(llm=None)
 
     pipeline_cls = LampsCrewPipeline if use_crewai else LampsPipeline
-    pipeline = pipeline_cls(
-        fetcher=fetcher,
-        extractor=extractor,
-        classifier=classifier,
-        verdict=verdict,
-    )
+    pipeline_kwargs = {
+        "fetcher": fetcher,
+        "extractor": extractor,
+        "classifier": classifier,
+        "verdict": verdict,
+    }
+    if use_crewai:
+        pipeline_kwargs["crew_llm"] = CrewAIToolRouterLLM()
+    pipeline = pipeline_cls(**pipeline_kwargs)
     if use_crewai:
         pipeline.crew = pipeline.build_crew()
     return pipeline

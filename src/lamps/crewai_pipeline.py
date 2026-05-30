@@ -261,7 +261,6 @@ class LampsCrewPipeline:
             tasks=[fetch_task, extract_task, classify_task, verdict_task],
             process=Process.sequential,
             verbose=self.verbose,
-            function_calling_llm=self.crew_llm,
         )
 
     def build_tools(self) -> dict[str, object]:
