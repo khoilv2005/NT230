@@ -326,6 +326,10 @@ class LampsCrewPipeline:
                 self._pipeline = pipeline
 
             def _run(self, package: str, archive_path: Optional[str] = None) -> str:
+                if not package:
+                    fetch = self._pipeline._state.get("fetch")
+                    if fetch is not None:
+                        package = fetch.package
                 if archive_path is None:
                     fetch = self._pipeline._state.get("fetch")
                     if fetch is None:
@@ -354,6 +358,10 @@ class LampsCrewPipeline:
                 self._pipeline = pipeline
 
             def _run(self, package: str) -> str:
+                if not package:
+                    fetch = self._pipeline._state.get("fetch")
+                    if fetch is not None:
+                        package = fetch.package
                 files = self._pipeline._state.get("files")
                 if files is None:
                     raise RuntimeError("No extracted files in CrewAI state.")
@@ -386,6 +394,10 @@ class LampsCrewPipeline:
                 self._pipeline = pipeline
 
             def _run(self, package: str) -> str:
+                if not package:
+                    fetch = self._pipeline._state.get("fetch")
+                    if fetch is not None:
+                        package = fetch.package
                 classifications = self._pipeline._state.get("classifications")
                 if classifications is None:
                     raise RuntimeError("No classifications in CrewAI state.")

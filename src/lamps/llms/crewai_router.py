@@ -67,6 +67,8 @@ class CrewAIToolRouterLLM:  # subclassed lazily to avoid mandatory CrewAI import
         class _Router(BaseLLM):
             def __init__(self) -> None:
                 super().__init__(model="lamps-crewai-tool-router")
+                self._current_package: str = ""
+                self._current_version: str | None = None
 
             def call(
                 self,
@@ -91,11 +93,15 @@ class CrewAIToolRouterLLM:  # subclassed lazily to avoid mandatory CrewAI import
 
                 if "fetch_pypi_source_archive" in route_text:
                     action_input = {"package": package, "version": version}
+                    self._current_package = package
+                    self._current_version = version
                     return (
                         "Thought: I need to fetch the requested PyPI source archive.\n"
                         "Action: fetch_pypi_source_archive\n"
                         f"Action Input: {json.dumps(action_input)}"
                     )
+                if not package:
+                    package = self._current_package
                 if "extract_relevant_python_files" in route_text:
                     action_input = {"package": package, "archive_path": None}
                     return (
