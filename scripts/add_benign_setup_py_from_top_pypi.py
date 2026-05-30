@@ -80,21 +80,32 @@ def extract_setup(filename: str, data: bytes) -> tuple[str, bytes] | None:
     return None
 
 
-def process_project(project: str, rank: int, download_count: int, deny: set[str]) -> dict[str, str]:
+def process_project(
+    project: str,
+    rank: int,
+    download_count: int,
+    deny: set[str],
+    existing: set[str],
+    existing_sample_ids: set[str],
+) -> dict[str, str]:
     norm = normalize_name(project)
     if norm in deny:
         return {"status": "skipped_malicious_name", "project": project}
+    if norm in existing:
+        return {"status": "skipped_existing_benign", "project": project}
     try:
         selected = select_sdist(project)
         if selected is None:
             return {"status": "skipped_no_sdist", "project": project}
         version, filename, url = selected
+        sample_id = safe_id(project, version, filename)
+        if sample_id in existing_sample_ids:
+            return {"status": "skipped_existing_benign", "project": project, "sample_id": sample_id}
         data = urlopen_bytes(url, timeout=60)
         found = extract_setup(filename, data)
         if found is None:
             return {"status": "skipped_no_setup_py", "project": project, "version": version, "filename": filename}
         setup_member, setup_bytes = found
-        sample_id = safe_id(project, version, filename)
         dst_dir = OUT / "benign" / sample_id
         dst_dir.mkdir(parents=True, exist_ok=True)
         (dst_dir / "setup.py").write_bytes(setup_bytes)
@@ -116,12 +127,37 @@ def process_project(project: str, rank: int, download_count: int, deny: set[str]
         return {"status": "error", "project": project, "error": repr(exc)}
 
 
-def write_existing_and_benign_manifest(benign_rows: list[dict[str, str]]) -> None:
+def existing_benign_rows() -> list[dict[str, str]]:
+    manifest = OUT / "manifest.csv"
+    if not manifest.exists():
+        return []
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    with manifest.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            if row.get("label") != "benign":
+                continue
+            key = row.get("sample_id") or row.get("output") or row.get("source_archive")
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+def write_existing_and_benign_manifest(benign_rows: list[dict[str, str]], keep_existing_benign: bool = False) -> None:
     manifest = OUT / "manifest.csv"
     old_rows: list[dict[str, str]] = []
     if manifest.exists():
+        seen: set[str] = set()
         with manifest.open(newline="", encoding="utf-8") as f:
-            old_rows = [row for row in csv.DictReader(f) if row.get("label") != "benign"]
+            for row in csv.DictReader(f):
+                if row.get("label") == "benign" and not keep_existing_benign:
+                    continue
+                key = row.get("sample_id") or row.get("output") or row.get("source_archive")
+                if key in seen:
+                    continue
+                seen.add(key)
+                old_rows.append(row)
     fieldnames = ["sample_id", "label", "dataset", "source_archive", "setup_member", "output"]
     with manifest.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -135,6 +171,7 @@ def main() -> int:
     parser.add_argument("--target", type=int, default=0, help="Benign setup.py count target. Default: match malicious count.")
     parser.add_argument("--workers", type=int, default=12)
     parser.add_argument("--limit", type=int, default=15000)
+    parser.add_argument("--append", action="store_true", help="Keep existing benign samples and only add missing samples.")
     args = parser.parse_args()
 
     benign_dir = OUT / "benign"
@@ -142,16 +179,39 @@ def main() -> int:
     if not malicious_dir.exists():
         print(f"Missing malicious dir: {malicious_dir}", file=sys.stderr)
         return 1
-    if benign_dir.exists():
+    existing_rows = existing_benign_rows() if args.append else []
+    existing_projects = {
+        normalize_name(row["project"])
+        for row in existing_rows
+        if row.get("project")
+    }
+    existing_sample_ids = {row["sample_id"] for row in existing_rows if row.get("sample_id")}
+
+    if benign_dir.exists() and not args.append:
         shutil.rmtree(benign_dir)
     benign_dir.mkdir(parents=True, exist_ok=True)
 
     target = args.target or sum(1 for item in malicious_dir.iterdir() if item.is_dir())
     projects = top_pypi_projects()[: args.limit]
     deny = malicious_names()
-    benign_rows: list[dict[str, str]] = []
+    benign_rows: list[dict[str, str]] = list(existing_rows)
     status_counts: dict[str, int] = {}
     started = time.time()
+
+    if len(benign_rows) >= target:
+        summary = {
+            "target": target,
+            "existing": len(existing_rows),
+            "written": len(benign_rows),
+            "new_written": 0,
+            "status_counts": {"already_at_target": 1},
+            "top_pypi_limit": args.limit,
+            "workers": args.workers,
+            "append": args.append,
+        }
+        (OUT / "benign_top_pypi_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(json.dumps(summary, indent=2))
+        return 0
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
@@ -161,6 +221,8 @@ def main() -> int:
                 idx,
                 int(row.get("download_count") or 0),
                 deny,
+                existing_projects,
+                existing_sample_ids,
             ): str(row["project"])
             for idx, row in enumerate(projects, start=1)
         }
@@ -178,13 +240,19 @@ def main() -> int:
                 elapsed = time.time() - started
                 print(json.dumps({"checked": done, "written": len(benign_rows), "elapsed_sec": round(elapsed, 1)}), flush=True)
 
-    write_existing_and_benign_manifest(benign_rows)
+    write_existing_and_benign_manifest(
+        benign_rows[len(existing_rows):] if args.append else benign_rows,
+        keep_existing_benign=args.append,
+    )
     summary = {
         "target": target,
+        "existing": len(existing_rows),
         "written": len(benign_rows),
+        "new_written": max(0, len(benign_rows) - len(existing_rows)),
         "status_counts": status_counts,
         "top_pypi_limit": args.limit,
         "workers": args.workers,
+        "append": args.append,
     }
     (OUT / "benign_top_pypi_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
