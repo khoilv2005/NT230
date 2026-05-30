@@ -152,9 +152,14 @@ class LampsCrewPipeline:
         Agent, Crew, Process, Task = _import_crewai()
         tools = self.build_tools()
 
-        agent_kwargs: dict[str, Any] = {"verbose": self.verbose}
+        agent_kwargs: dict[str, Any] = {
+            "verbose": self.verbose,
+            "allow_delegation": False,
+            "max_iter": 5,
+        }
         if self.crew_llm is not None:
             agent_kwargs["llm"] = self.crew_llm
+            agent_kwargs["function_calling_llm"] = self.crew_llm
 
         fetcher_agent = Agent(
             role="Fetcher Agent",
@@ -203,33 +208,39 @@ class LampsCrewPipeline:
         fetch_task = Task(
             description=(
                 "For package '{package}' and optional version '{version}', "
-                "call the fetch tool and return archive metadata as JSON."
+                "you MUST call the fetch_pypi_source_archive tool exactly once. "
+                "Do not infer package metadata from memory. Return the tool output as JSON."
             ),
             expected_output="JSON with package, version, archive_path, and archive_url.",
             agent=fetcher_agent,
+            tools=[tools["fetch"]],
         )
         extract_task = Task(
             description=(
-                "Using the fetched package archive, call the extraction tool "
-                "and return the selected Python file list."
+                "Using the fetched package archive from context, you MUST call "
+                "the extract_relevant_python_files tool exactly once and return "
+                "the selected Python file list."
             ),
             expected_output="JSON with package, n_files, and selected file paths.",
             agent=extractor_agent,
             context=[fetch_task],
+            tools=[tools["extract"]],
         )
         classify_task = Task(
             description=(
-                "Call the classifier tool for the selected files and return "
-                "file-level labels and confidence scores."
+                "You MUST call the classify_python_files tool exactly once for "
+                "the selected files and return file-level labels and confidence scores."
             ),
             expected_output="JSON with package, n_files, and per-file predictions.",
             agent=classifier_agent,
             context=[extract_task],
+            tools=[tools["classify"]],
         )
         verdict_task = Task(
             description=(
-                "Call the verdict tool to aggregate file predictions and "
-                "return the final package-level LAMPS verdict."
+                "You MUST call the aggregate_package_verdict tool exactly once "
+                "to aggregate file predictions and return the final package-level "
+                "LAMPS verdict."
             ),
             expected_output=(
                 "JSON with package, label, target, n_files, "
@@ -237,6 +248,7 @@ class LampsCrewPipeline:
             ),
             agent=verdict_agent,
             context=[classify_task],
+            tools=[tools["verdict"]],
         )
 
         return Crew(
@@ -249,6 +261,7 @@ class LampsCrewPipeline:
             tasks=[fetch_task, extract_task, classify_task, verdict_task],
             process=Process.sequential,
             verbose=self.verbose,
+            function_calling_llm=self.crew_llm,
         )
 
     def build_tools(self) -> dict[str, object]:
