@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LAMPS Full Pipeline Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="workspace">
+        <aside class="panel control-panel" aria-label="Analysis controls">
+          <div class="brand-row">
+            <div class="brand-mark">L</div>
+            <div>
+              <h1>LAMPS</h1>
+              <p>Full PyPI package pipeline</p>
+            </div>
+          </div>
+
+          <form id="analyzeForm" class="analysis-form">
+            <label class="field">
+              <span>Package</span>
+              <input id="packageInput" name="package" type="text" value="requests" autocomplete="off" required />
+            </label>
+
+            <label class="field">
+              <span>Version</span>
+              <input id="versionInput" name="version" type="text" placeholder="latest stable" autocomplete="off" />
+            </label>
+
+            <div class="toggles">
+              <label class="toggle">
+                <input id="crewaiInput" type="checkbox" checked />
+                <span>CrewAI orchestration</span>
+              </label>
+              <label class="toggle">
+                <input id="explainInput" type="checkbox" checked />
+                <span>Ollama rationale</span>
+              </label>
+            </div>
+
+            <button id="submitButton" class="primary-action" type="submit">
+              <span class="button-icon">▶</span>
+              <span>Analyze package</span>
+            </button>
+          </form>
+
+          <div class="status-card">
+            <div class="status-dot" id="healthDot"></div>
+            <div>
+              <strong id="healthTitle">Checking runtime</strong>
+              <p id="healthText">Loading model and environment status.</p>
+            </div>
+          </div>
+
+          <div class="sample-list">
+            <span>Samples</span>
+            <button class="sample-button" data-package="requests">requests</button>
+            <button class="sample-button" data-package="certifi">certifi</button>
+            <button class="sample-button" data-package="spacestudio-orbit-propagation" data-version="1.1.3">
+              spacestudio-orbit
+            </button>
+            <button class="sample-button" data-package="grandslam" data-version="0.1.0">grandslam</button>
+          </div>
+        </aside>
+
+        <section class="main-panel">
+          <div class="topbar">
+            <div>
+              <h2>Package verdict</h2>
+              <p id="runMeta">No run yet</p>
+            </div>
+            <div id="runState" class="run-state idle">Idle</div>
+          </div>
+
+          <section id="emptyState" class="empty-state">
+            <div class="empty-icon">◇</div>
+            <h3>Run live full pipeline</h3>
+            <p>Fetcher downloads source archive, Extractor selects Python files, CodeBERT classifies each file, Verdict aggregates package risk.</p>
+          </section>
+
+          <section id="loadingState" class="loading-state hidden">
+            <div class="spinner"></div>
+            <h3>Analyzing package</h3>
+            <p>Live PyPI download and model inference can take several minutes.</p>
+          </section>
+
+          <section id="resultView" class="result-view hidden">
+            <div class="verdict-grid">
+              <div id="verdictCard" class="verdict-card">
+                <span class="eyebrow">Verdict</span>
+                <strong id="verdictLabel">-</strong>
+                <p id="verdictSummary">-</p>
+              </div>
+              <div class="metric-card">
+                <span>Files seen</span>
+                <strong id="filesSeen">0</strong>
+              </div>
+              <div class="metric-card">
+                <span>Flagged files</span>
+                <strong id="flaggedFiles">0</strong>
+              </div>
+              <div class="metric-card">
+                <span>Elapsed</span>
+                <strong id="elapsedTime">0s</strong>
+              </div>
+            </div>
+
+            <div class="section-band">
+              <div class="section-heading">
+                <h3>Agent Trace</h3>
+                <span id="traceCount">0 steps</span>
+              </div>
+              <div id="traceList" class="trace-list"></div>
+            </div>
+
+            <div class="section-band">
+              <div class="section-heading">
+                <h3>Rationale</h3>
+              </div>
+              <p id="rationaleText" class="rationale"></p>
+            </div>
+
+            <div class="section-band">
+              <div class="section-heading">
+                <h3>File Predictions</h3>
+                <span id="fileCount">0 files</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th>Label</th>
+                      <th>Score</th>
+                    </tr>
+                  </thead>
+                  <tbody id="fileTable"></tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section id="errorView" class="error-view hidden">
+            <h3>Analysis failed</h3>
+            <pre id="errorText"></pre>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

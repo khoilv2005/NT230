@@ -9,10 +9,15 @@
 /results/
 /Dataset/
 # Model checkpoints (large binary files)
+/model.bin
 /models/codebert-malware-detector/saved_models/
 /models/codebert-malware-detector/data/train.jsonl
 /models/codebert-malware-detector/data/val.jsonl
 /models/codebert-malware-detector/data/test.jsonl
+
+# Local visual QA captures
+/web_demo_desktop.png
+/web_demo_mobile.png
 
 # Secrets
 .env

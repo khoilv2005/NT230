@@ -1,6 +1,6 @@
 # Core ML
 torch>=2.0
-transformers>=4.36
+transformers==4.40.0
 accelerate
 einops
 
@@ -8,10 +8,12 @@ einops
 crewai>=0.30
 google-genai
 ollama
+fastapi
+uvicorn
 
 # Data
 pandas
-numpy
+numpy<2
 scikit-learn
 scipy
 

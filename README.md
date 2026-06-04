@@ -116,6 +116,19 @@ the paper-aligned full pipeline: Fetcher -> Ollama-backed Extractor ->
 CodeBERT Classifier -> Ollama-backed Verdict. The CrewAI wrapper defines the
 four CrewAI roles and tasks and records an auditable execution trace.
 
+### Web demo — full pipeline UI
+
+```powershell
+pip install -r requirements.txt
+$env:OLLAMA_API_KEY = "<your-api-key>"
+uvicorn web_demo.app:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000`. The web UI runs the live package pipeline and
+shows the package verdict, four-agent trace, rationale, and per-file
+predictions. It downloads source archives only; it does not install analysed
+packages.
+
 ## Citation
 
 ```bibtex
