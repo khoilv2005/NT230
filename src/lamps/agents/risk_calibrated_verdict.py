@@ -9,6 +9,7 @@ single high-scoring docs/example file can otherwise flip a whole benign package.
 from __future__ import annotations
 
 import ast
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
@@ -648,4 +649,210 @@ class RiskCalibratedVerdictAgentV2(RiskCalibratedVerdictAgent):
             return False
         return self._is_critical_path(rel_path, source) or self._is_entrypoint_path(
             rel_path, source
+        )
+
+
+class RiskCalibratedVerdictAgentV3(RiskCalibratedVerdictAgentV2):
+    """Paper-facing RC-PAA variant.
+
+    V3 keeps V2 scoring behavior but adds three paper-facing capabilities:
+
+    * structured outcome fields on PackageVerdict;
+    * optional LLM rationale over the structured RC-PAA outcome;
+    * recursive import propagation from entrypoints, including literal dynamic
+      imports such as ``__import__("mod")`` and
+      ``importlib.import_module("mod")``.
+    """
+
+    def __init__(
+        self,
+        llm: object | None = None,
+        package_threshold: float = 0.72,
+        max_import_depth: int = 3,
+        **kwargs,
+    ) -> None:
+        super().__init__(llm=llm, package_threshold=package_threshold, **kwargs)
+        self.max_import_depth = max_import_depth
+
+    def aggregate(
+        self,
+        package: str,
+        predictions: Sequence[FileClassification],
+        files: Sequence[ExtractedFile] | Mapping[str, str] | None = None,
+    ) -> PackageVerdict:
+        source_by_path = self._source_map(files)
+        imported_by_critical = self._critical_import_targets(source_by_path)
+        n_files = len(predictions)
+
+        risks = [
+            self._calibrate_file(pred, source_by_path, imported_by_critical, n_files)
+            for pred in predictions
+        ]
+        self.last_file_risks = risks
+
+        risk_by_path = {r.rel_path: r for r in risks}
+        suspicious = [
+            p
+            for p in predictions
+            if risk_by_path.get(p.rel_path, self._empty_risk(p)).calibrated_score
+            >= self.package_threshold
+        ]
+        benign = [p for p in predictions if p not in suspicious]
+
+        verdict = PackageVerdict(
+            package=package,
+            label="malicious" if suspicious else "benign",
+            target=1 if suspicious else 0,
+            malicious_files=list(suspicious),
+            benign_files=benign if suspicious else list(predictions),
+        )
+
+        self._attach_structured_outcome(verdict, risks)
+        if self.llm is not None:
+            verdict.rationale = self._explain(verdict)
+        else:
+            verdict.rationale = self._risk_rationale(verdict, risks)
+        return verdict
+
+    def _critical_import_targets(self, source_by_path: Mapping[str, str]) -> set[str]:
+        """Recursively propagate import risk from true execution entrypoints."""
+        module_to_path = self._module_index(source_by_path)
+        graph: dict[str, set[str]] = {}
+        roots: list[str] = []
+        for rel_path, source in source_by_path.items():
+            imported_paths: set[str] = set()
+            for module in self._imports(source):
+                for candidate in self._module_candidates(module):
+                    path = module_to_path.get(candidate)
+                    if path and path != rel_path:
+                        imported_paths.add(path)
+            graph[rel_path] = imported_paths
+            if self._is_entrypoint_path(rel_path, source):
+                roots.append(rel_path)
+
+        targets: set[str] = set()
+        queue: list[tuple[str, int]] = [(root, 0) for root in roots]
+        seen = set(roots)
+        while queue:
+            current, depth = queue.pop(0)
+            if depth >= self.max_import_depth:
+                continue
+            for target in graph.get(current, set()):
+                if target in seen:
+                    continue
+                seen.add(target)
+                targets.add(target)
+                queue.append((target, depth + 1))
+        return targets
+
+    def _imports(self, source: str) -> set[str]:
+        modules = super()._imports(source)
+        if not source:
+            return modules
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            return modules
+        for node in ast.walk(tree):
+            module = self._literal_dynamic_import(node)
+            if module:
+                modules.add(module)
+        return modules
+
+    def _literal_dynamic_import(self, node: ast.AST) -> str | None:
+        if not isinstance(node, ast.Call):
+            return None
+        if not node.args:
+            return None
+        func = node.func
+        if isinstance(func, ast.Name) and func.id == "__import__":
+            return self._literal_string(node.args[0])
+        if isinstance(func, ast.Attribute) and func.attr == "import_module":
+            if isinstance(func.value, ast.Name) and func.value.id == "importlib":
+                return self._literal_string(node.args[0])
+        return None
+
+    def _literal_string(self, node: ast.AST) -> str | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            parts: list[str] = []
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                else:
+                    return None
+            return "".join(parts)
+        return None
+
+    def _attach_structured_outcome(
+        self, verdict: PackageVerdict, risks: Sequence[CalibratedFileRisk]
+    ) -> None:
+        top = sorted(risks, key=lambda r: r.calibrated_score, reverse=True)
+        trigger = top[0] if top else None
+        confidence = float(trigger.calibrated_score) if trigger else 0.0
+        trigger_file = trigger.rel_path if trigger else ""
+        reason = self._structured_reason(verdict, trigger)
+        top_risk_files = [
+            {
+                "path": r.rel_path,
+                "base_score": round(r.base_score, 4),
+                "calibrated_score": round(r.calibrated_score, 4),
+                "is_critical": r.is_critical,
+                "imported_by_critical": r.imported_by_critical,
+                "behavior_score": round(r.behavior_score, 4),
+                "reasons": r.reasons,
+            }
+            for r in top[:5]
+        ]
+
+        verdict.confidence = confidence
+        verdict.trigger_file = trigger_file
+        verdict.reason = reason
+        verdict.structured_outcome = {
+            "package": verdict.package,
+            "verdict": verdict.label,
+            "target": verdict.target,
+            "confidence": confidence,
+            "threshold": self.package_threshold,
+            "trigger_file": trigger_file,
+            "reason": reason,
+            "n_files": verdict.n_files,
+            "n_malicious_files": len(verdict.malicious_files),
+            "top_risk_files": top_risk_files,
+        }
+
+    def _structured_reason(
+        self, verdict: PackageVerdict, trigger: CalibratedFileRisk | None
+    ) -> str:
+        if trigger is None:
+            return "No extracted Python files were available for RC-PAA aggregation."
+        if verdict.target == 0:
+            return (
+                "No file exceeded the package risk threshold after RC-PAA "
+                "context calibration."
+            )
+        reason_bits: list[str] = []
+        if trigger.is_critical:
+            reason_bits.append("critical execution file")
+        if trigger.imported_by_critical:
+            reason_bits.append("reachable from install/runtime entrypoint")
+        if trigger.behavior_score > 0:
+            reason_bits.append(f"static high-risk behavior={trigger.behavior_score:.2f}")
+        if trigger.reasons:
+            reason_bits.extend(trigger.reasons[:3])
+        if not reason_bits:
+            reason_bits.append("high calibrated CodeBERT risk")
+        return "; ".join(reason_bits)
+
+    def _build_prompt(self, verdict: PackageVerdict) -> str:
+        payload = verdict.structured_outcome or verdict.to_dict()
+        return (
+            "You are the Verdict Agent in the LAMPS RC-PAA pipeline. "
+            "Use the structured package-level RC-PAA outcome below to write a "
+            "concise 3-5 sentence security rationale. Name the trigger file, "
+            "confidence, key risk reasons, and whether the package should be "
+            "treated as malicious or benign. Do not invent files or evidence "
+            "outside the JSON payload.\n\n"
+            f"{json.dumps(payload, indent=2)}"
         )

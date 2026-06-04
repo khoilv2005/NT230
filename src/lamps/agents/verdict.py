@@ -24,6 +24,10 @@ class PackageVerdict:
     malicious_files: list[FileClassification] = field(default_factory=list)
     benign_files: list[FileClassification] = field(default_factory=list)
     rationale: str = ""
+    confidence: float = 0.0
+    trigger_file: str = ""
+    reason: str = ""
+    structured_outcome: dict = field(default_factory=dict)
 
     @property
     def n_files(self) -> int:
@@ -33,12 +37,17 @@ class PackageVerdict:
         return {
             "package": self.package,
             "label": self.label,
+            "verdict": self.label,
             "target": self.target,
+            "confidence": self.confidence,
+            "trigger_file": self.trigger_file,
+            "reason": self.reason,
             "n_files": self.n_files,
             "malicious_files": [
                 {"path": f.rel_path, "score": f.score} for f in self.malicious_files
             ],
             "rationale": self.rationale,
+            "structured_outcome": self.structured_outcome,
         }
 
 

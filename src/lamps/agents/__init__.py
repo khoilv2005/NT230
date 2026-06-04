@@ -7,6 +7,7 @@ from .verdict import VerdictAgent
 from .risk_calibrated_verdict import (
     RiskCalibratedVerdictAgent,
     RiskCalibratedVerdictAgentV2,
+    RiskCalibratedVerdictAgentV3,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "VerdictAgent",
     "RiskCalibratedVerdictAgent",
     "RiskCalibratedVerdictAgentV2",
+    "RiskCalibratedVerdictAgentV3",
 ]
