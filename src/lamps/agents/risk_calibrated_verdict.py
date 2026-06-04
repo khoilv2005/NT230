@@ -390,3 +390,262 @@ class RiskCalibratedVerdictAgent(VerdictAgent):
             f"aggregation: no file exceeds threshold {self.package_threshold:.2f}. "
             f"Top residual risks: {highlights}."
         )
+
+
+class RiskCalibratedVerdictAgentV2(RiskCalibratedVerdictAgent):
+    """Second risk-calibrated aggregation strategy.
+
+    V2 keeps the same public API as V1 but tightens the parts that created
+    false positives in large benign packages:
+
+    * import boost is inherited only from install/runtime entrypoints, not from
+      every ``__init__.py``;
+    * ``__init__.py`` receives a smaller critical bonus than ``setup.py``;
+    * generated/resource/tooling files receive stronger penalties;
+    * small packages with high-risk behavior in an entrypoint get a rescue
+      boost even when CodeBERT is under-confident.
+    """
+
+    def __init__(
+        self,
+        llm: object | None = None,
+        package_threshold: float = 0.72,
+        critical_bonus: float = 0.20,
+        import_bonus: float = 0.12,
+        behavior_bonus: float = 0.24,
+        low_confidence_penalty: float = 0.14,
+        docs_examples_penalty: float = 0.42,
+        tooling_penalty: float = 0.32,
+        large_package_penalty: float = 0.10,
+        generated_penalty: float = 0.28,
+        small_package_behavior_bonus: float = 0.28,
+    ) -> None:
+        super().__init__(
+            llm=llm,
+            package_threshold=package_threshold,
+            critical_bonus=critical_bonus,
+            import_bonus=import_bonus,
+            behavior_bonus=behavior_bonus,
+            low_confidence_penalty=low_confidence_penalty,
+            docs_examples_penalty=docs_examples_penalty,
+            tooling_penalty=tooling_penalty,
+            large_package_penalty=large_package_penalty,
+        )
+        self.generated_penalty = generated_penalty
+        self.small_package_behavior_bonus = small_package_behavior_bonus
+
+    def _calibrate_file(
+        self,
+        pred: FileClassification,
+        source_by_path: Mapping[str, str],
+        imported_by_critical: set[str],
+        n_files: int,
+    ) -> CalibratedFileRisk:
+        rel_path = pred.rel_path
+        source = source_by_path.get(rel_path, "")
+        is_critical = self._is_critical_path(rel_path, source)
+        is_imported = rel_path in imported_by_critical
+        behavior = self._behavior_score(source)
+        context_penalty, context_reasons = self._context_penalty(
+            rel_path, is_critical, is_imported
+        )
+
+        low_penalty = (
+            self.low_confidence_penalty
+            if 0.50 <= pred.score < 0.82 and not is_critical and not is_imported
+            else 0.0
+        )
+        large_penalty = self._large_package_penalty(rel_path, n_files, is_critical, is_imported)
+        generated_penalty, generated_reasons = self._generated_resource_penalty(
+            rel_path, is_critical, is_imported
+        )
+
+        score = pred.score
+        reasons: list[str] = []
+
+        role_bonus = self._critical_role_bonus(rel_path, source) if is_critical else 0.0
+        if role_bonus:
+            score += role_bonus
+            reasons.append(f"critical_path_bonus={role_bonus:.2f}")
+        if is_imported:
+            score += self.import_bonus
+            reasons.append("imported_by_entrypoint")
+        if behavior > 0:
+            score += self.behavior_bonus * behavior
+            reasons.append(f"behavior={behavior:.2f}")
+
+        if self._small_package_behavior_rescue(rel_path, source, behavior, n_files):
+            score += self.small_package_behavior_bonus
+            reasons.append("small_package_behavior_rescue")
+
+        if low_penalty:
+            score -= low_penalty
+            reasons.append("low_confidence_penalty")
+        if context_penalty:
+            score -= context_penalty
+            reasons.extend(context_reasons)
+        if large_penalty:
+            score -= large_penalty
+            reasons.append(f"large_package_penalty={large_penalty:.2f}")
+        if generated_penalty:
+            score -= generated_penalty
+            reasons.extend(generated_reasons)
+
+        return CalibratedFileRisk(
+            package=pred.package,
+            rel_path=rel_path,
+            base_score=float(pred.score),
+            calibrated_score=max(0.0, min(1.0, float(score))),
+            is_critical=is_critical,
+            imported_by_critical=is_imported,
+            behavior_score=behavior,
+            context_penalty=context_penalty + large_penalty + generated_penalty,
+            low_confidence_penalty=low_penalty,
+            reasons=reasons,
+        )
+
+    def _critical_import_targets(self, source_by_path: Mapping[str, str]) -> set[str]:
+        """Only propagate import risk from true execution entrypoints.
+
+        V1 propagated from all critical files, including every ``__init__.py``.
+        In large benign packages that makes normal modules look like execution
+        chain payloads. V2 restricts propagation to setup/install/build/main
+        files.
+        """
+        module_to_path = self._module_index(source_by_path)
+        targets: set[str] = set()
+        for rel_path, source in source_by_path.items():
+            if not self._is_entrypoint_path(rel_path, source):
+                continue
+            for module in self._imports(source):
+                for candidate in self._module_candidates(module):
+                    path = module_to_path.get(candidate)
+                    if path and path != rel_path:
+                        targets.add(path)
+        return targets
+
+    def _is_entrypoint_path(self, rel_path: str, source: str) -> bool:
+        path = PurePosixPath(rel_path.replace("\\", "/"))
+        name = path.name.lower()
+        lowered = rel_path.lower().replace("\\", "/")
+        if name in {
+            "setup.py",
+            "__main__.py",
+            "install.py",
+            "installer.py",
+            "post_install.py",
+            "build.py",
+        }:
+            return True
+        if "cmdclass" in source and ("install" in source or "develop" in source):
+            return True
+        return "/setup/" in lowered or "/install/" in lowered
+
+    def _critical_role_bonus(self, rel_path: str, source: str) -> float:
+        path = PurePosixPath(rel_path.replace("\\", "/"))
+        name = path.name.lower()
+        if name == "setup.py":
+            return 0.26
+        if name in {"install.py", "installer.py", "post_install.py", "build.py"}:
+            return 0.24
+        if name == "__main__.py":
+            return 0.18
+        if name == "__init__.py":
+            return 0.08
+        if "cmdclass" in source and ("install" in source or "develop" in source):
+            return 0.26
+        return min(self.critical_bonus, 0.16)
+
+    def _context_penalty(
+        self, rel_path: str, is_critical: bool, imported_by_critical: bool
+    ) -> tuple[float, list[str]]:
+        penalty, reasons = super()._context_penalty(
+            rel_path, is_critical, imported_by_critical
+        )
+        path = PurePosixPath(rel_path.replace("\\", "/"))
+        parts = {p.lower() for p in path.parts}
+        name = path.name.lower()
+
+        # Do not exempt critical files from docs/tooling penalties when they live
+        # under non-runtime areas. This handles e.g. docs_src/.../__init__.py.
+        doc_or_example = {
+            "docs_src",
+            "docs",
+            "doc",
+            "examples",
+            "example",
+            "tutorial",
+            "tutorials",
+            "tests",
+            "test",
+            "testing",
+            "benchmarks",
+            "benchmark",
+        }
+        tooling = {"scripts", "tools", "dev", "demo", "demos", "samples", "sample"}
+
+        if parts & doc_or_example:
+            penalty = max(penalty, self.docs_examples_penalty)
+            if "docs_examples_test_penalty" not in reasons:
+                reasons.append("docs_examples_test_penalty")
+        if parts & tooling and not imported_by_critical:
+            penalty = max(penalty, self.tooling_penalty)
+            if "tooling_script_penalty" not in reasons:
+                reasons.append("tooling_script_penalty")
+        if "health_check" in name or "tutorial" in name:
+            penalty = max(penalty, self.tooling_penalty)
+            if "health_tutorial_penalty" not in reasons:
+                reasons.append("health_tutorial_penalty")
+        return penalty, reasons
+
+    def _large_package_penalty(
+        self, rel_path: str, n_files: int, is_critical: bool, imported_by_critical: bool
+    ) -> float:
+        if is_critical or imported_by_critical:
+            return 0.0
+        if n_files >= 500:
+            return 0.22
+        if n_files >= 250:
+            return 0.18
+        if n_files >= 100:
+            return 0.14
+        if n_files >= 50:
+            return self.large_package_penalty
+        return 0.0
+
+    def _generated_resource_penalty(
+        self, rel_path: str, is_critical: bool, imported_by_critical: bool
+    ) -> tuple[float, list[str]]:
+        lowered = rel_path.lower().replace("\\", "/")
+        name = PurePosixPath(lowered).name
+        generated_markers = [
+            "_version_meson.py",
+            "coefficients.py",
+            "resources/",
+            "/valid/",
+            "/invalid/",
+            "parser/resources",
+            "vendored-meson",
+            "generated",
+            "fixtures",
+            "test cases",
+            "tables/",
+            "_builtins.py",
+        ]
+        if any(marker in lowered for marker in generated_markers):
+            penalty = self.generated_penalty * (0.5 if is_critical or imported_by_critical else 1.0)
+            return penalty, [f"generated_resource_penalty={penalty:.2f}"]
+        if name.startswith("_version") or name.endswith("_coefficients.py"):
+            return self.generated_penalty, [f"generated_resource_penalty={self.generated_penalty:.2f}"]
+        return 0.0, []
+
+    def _small_package_behavior_rescue(
+        self, rel_path: str, source: str, behavior: float, n_files: int
+    ) -> bool:
+        if n_files > 3:
+            return False
+        if behavior < 0.85:
+            return False
+        return self._is_critical_path(rel_path, source) or self._is_entrypoint_path(
+            rel_path, source
+        )

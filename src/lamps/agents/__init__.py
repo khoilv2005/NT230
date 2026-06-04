@@ -4,7 +4,10 @@ from .fetcher import FetcherAgent
 from .extractor import ExtractorAgent, LLMArchiveExtractorAgent, LLMExtractorAgent
 from .classifier import ClassifierAgent
 from .verdict import VerdictAgent
-from .risk_calibrated_verdict import RiskCalibratedVerdictAgent
+from .risk_calibrated_verdict import (
+    RiskCalibratedVerdictAgent,
+    RiskCalibratedVerdictAgentV2,
+)
 
 __all__ = [
     "FetcherAgent",
@@ -14,4 +17,5 @@ __all__ = [
     "ClassifierAgent",
     "VerdictAgent",
     "RiskCalibratedVerdictAgent",
+    "RiskCalibratedVerdictAgentV2",
 ]
