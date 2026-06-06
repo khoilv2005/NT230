@@ -4,11 +4,12 @@ from .fetcher import FetcherAgent
 from .extractor import ExtractorAgent, LLMArchiveExtractorAgent, LLMExtractorAgent
 from .classifier import ClassifierAgent
 from .verdict import VerdictAgent
-from .risk_calibrated_verdict import (
-    RiskCalibratedVerdictAgent,
-    RiskCalibratedVerdictAgentV2,
-    RiskCalibratedVerdictAgentV3,
-)
+from .risk_calibrated_verdict import RiskCalibratedVerdictAgent
+from .planner import SupervisorPlannerAgent
+from .package_acquisition import PackageAcquisitionAgent
+from .context_graph import StaticContextGraphAgent
+from .critic_verifier import CriticVerifierAgent
+from .decision_audit import DecisionAuditAgent
 
 __all__ = [
     "FetcherAgent",
@@ -18,6 +19,9 @@ __all__ = [
     "ClassifierAgent",
     "VerdictAgent",
     "RiskCalibratedVerdictAgent",
-    "RiskCalibratedVerdictAgentV2",
-    "RiskCalibratedVerdictAgentV3",
+    "SupervisorPlannerAgent",
+    "PackageAcquisitionAgent",
+    "StaticContextGraphAgent",
+    "CriticVerifierAgent",
+    "DecisionAuditAgent",
 ]

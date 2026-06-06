@@ -21,7 +21,7 @@ from typing import Optional
 
 
 DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-v4-flash:cloud")
-OLLAMA_CLOUD_HOST = "https://api.ollama.com"
+OLLAMA_CLOUD_HOST = "https://ollama.com"
 
 
 def _load_env() -> None:
