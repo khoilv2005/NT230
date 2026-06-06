@@ -52,10 +52,12 @@ malicious confidence, risk-context indicators, and benign-context penalties. The
 indicator-weighting design adapts the principle of risk-based static feature ranking,
 previously applied to Android permission analysis, to the domain of PyPI source package
 aggregation, and requires neither classifier retraining nor dynamic package execution.
-On an extended D2-style corpus comprising 518 packages and 23,440 filtered Python files,
-\rcpaa{} reduces false positives from 27 to 11, improves malicious-class precision from
-0.8996 to 0.9565, and improves F1 from 0.9184 to 0.9472, while preserving recall
-at 0.9380.
+On a deterministic balanced 1/10 full-package evaluation subset comprising 1,000
+packages, 33,592 Python files before filtering, and 25,511 filtered Python files,
+\rcpaa{} reduces false positives from 32 to 22, improves malicious-class precision from
+0.9340 to 0.9537, and improves F1 from 0.9198 to 0.9292, while preserving recall
+at 0.9060. McNemar's exact test indicates that the reduction in paired errors over
+the original any-file aggregation rule is statistically significant ($p=0.001953$).
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -288,38 +290,6 @@ and a natural-language explanation. The Shared Evidence Board is not an agent; i
 the persistent, structured state through which all agents exchange information and that
 makes inter-agent hand-offs explicit and auditable.
 
-\begin{table}[t]
-\centering
-\caption{Compute substrate assigned to each \tracelamps{} agent. LLM inference is
-confined to planning and explanation, while scoring remains deterministic.}
-\label{tab:substrate}
-\scriptsize
-\setlength{\tabcolsep}{2pt}
-\begin{tabular}{p{0.05\linewidth}p{0.31\linewidth}p{0.19\linewidth}p{0.33\linewidth}}
-\toprule
-\# & Agent & Substrate & Justification \\
-\midrule
-1 & Supervisor/Planner & LLM (optional) & Adaptive scheduling and analysis planning \\
-2 & Package Acquisition & Python & Deterministic archive retrieval and extraction \\
-3 & Static Context Graph & Python & Reproducible AST, regex, path, and import evidence \\
-4 & Semantic Classifier & \codebert{} & Domain fine-tuned file-level scoring \\
-5 & \rcpaa{} Aggregator & Python & Auditable arithmetic scoring formula \\
-6 & Critic/Verifier & Python + LLM$^\ast$ & Rule-first conflict checks, note-second rationale \\
-7 & Decision \& Audit & LLM (optional) & Natural-language explanation from structured evidence \\
-\bottomrule
-\multicolumn{4}{p{0.90\linewidth}}{$^\ast$The LLM generates a textual note only; it does not alter
-the \codebert{} score, calibrated risk, threshold, or final deterministic decision.}
-\end{tabular}
-\end{table}
-
-Table~\ref{tab:substrate} summarizes the compute substrate assigned to each
-agent. This separation is a deliberate design choice: LLM inference is
-confined to roles that benefit from natural-language flexibility, namely
-planning and explanation, whereas all scoring operations remain deterministic
-and auditable. Consequently, \prisk{} is reproducible independently of LLM
-availability or temperature settings, and the audit trail reflects explicit
-evidence and arithmetic rather than model-generated scores.
-
 \subsection{Threat Model and Scope}
 We assume an adversary can publish a PyPI package containing arbitrary Python source
 files, including installation scripts and auxiliary helper modules. The attacker may
@@ -397,6 +367,35 @@ the current implementation. Max pooling is retained at the package level because
 single payload file can compromise a package; however, the operand of the max
 operation is now a calibrated score rather than a raw classifier confidence, so benign-context files are less likely to dominate the package-level estimate.
 
+\begin{table}[t]
+\centering
+\caption{Decision threshold and principal \rcpaa{} weights used in the reported
+experiments. Positive values increase risk; penalty values are subtracted in
+Eq.~\ref{eq:file-risk}.}
+\label{tab:weights}
+\tiny
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{llr}
+\toprule
+Symbol & Component & Value \\
+\midrule
+$\tau$ & package decision threshold & 0.72 \\
+$\alpha_{\mathrm{setup}}$ & \texttt{setup.py} role bonus & 0.26 \\
+$\alpha_{\mathrm{install}}$ & install/build/post-install role bonus & 0.24 \\
+$\alpha_{\mathrm{main}}$ & \texttt{\_\_main\_\_.py} role bonus & 0.18 \\
+$\alpha_{\mathrm{init}}$ & \texttt{\_\_init\_\_.py} role bonus & 0.08 \\
+$\alpha_{\mathrm{import}}$ & imported by entrypoint bonus & 0.12 \\
+$\alpha_{\mathrm{behavior}}$ & behavior-score multiplier & 0.24 \\
+$\alpha_{\mathrm{small}}$ & small-package behavior rescue & 0.28 \\
+$\beta_{\mathrm{low}}$ & low-confidence non-critical penalty & 0.14 \\
+$\beta_{\mathrm{docs}}$ & docs/examples/tests/benchmarks penalty & 0.42 \\
+$\beta_{\mathrm{tool}}$ & tools/scripts/dev/demo/sample penalty & 0.32 \\
+$\beta_{\mathrm{gen}}$ & generated/resource/fixture penalty & 0.28 \\
+$\beta_{\mathrm{large}}$ & large-package non-critical penalty & 0.10--0.22 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 \begin{algorithm}[t]
 \caption{Evidence-Driven \rcpaa{} Aggregation}
 \label{alg:rcpaa}
@@ -445,36 +444,37 @@ calibration components contribute most to the performance improvement?
 
 \subsection{Dataset, Baselines, and Metrics}
 \label{sec:dataset}
-The evaluation uses an extended D2-style multi-file corpus comprising 518 packages
-and 23,440 filtered Python files, with 260 benign and 258 malicious packages. This
-corpus was constructed to replicate the general setting of the D2 dataset described in
-the original LAMPS paper~\cite{lamps} but differs in its exact composition; we
-therefore treat it as an extended replication corpus and do not claim direct one-to-one
-correspondence with the original D2 split.
+The evaluation uses a deterministic 1/10 balanced package-level subset sampled from
+\texttt{full\_package\_dataset\_balanced\_10000.zip}. The sampling seed is 230. The
+subset contains 1,000 packages, with 500 benign packages and 500 malicious packages.
+Before extraction filtering, the package records contain 33,592 Python files; after
+the relevance filter used by the package acquisition and extraction stage, 25,511
+Python files remain for classification and aggregation. This dataset is a full-package
+corpus rather than a setup-script-only corpus: each sample is a package directory with
+its Python files and a package-level label. File labels in the records are propagated
+from the package label and are therefore diagnostic metadata only, not independent
+file-level ground truth.
 
-We compare three configurations: the original LAMPS any-file aggregation rule, \rcpaa{}
-version~1, and \rcpaa{} version~2. A comprehensive comparison should additionally
-include raw max pooling, mean pooling, and majority voting over \codebert{} confidence
-scores as ablation baselines. Raw max pooling uses the maximum uncalibrated
-\codebert{} confidence as the package-level score. Mean pooling computes the
-arithmetic mean across files and is expected to under-detect sparse payloads. Majority
-voting labels a package malicious only when a majority of files are predicted malicious,
-which is typically inappropriate given the sparse nature of supply-chain malware. These
-baselines serve to isolate the effect of calibrated context from the effect of ordinary
-multi-instance pooling strategies.
+The evaluation is reported at package level. We compare the original LAMPS any-file
+rule, raw max pooling over uncalibrated \codebert{} confidence, average pooling,
+majority voting, and the proposed \rcpaa{} aggregation rule. Raw max pooling labels a
+package malicious when the maximum file-level \codebert{} confidence exceeds 0.50 and
+therefore matches the any-file rule in this setting. Average pooling uses the mean
+file confidence at threshold 0.50. Majority voting labels a package malicious only
+when most retained files are individually classified as malicious. \rcpaa{} uses the
+fixed decision threshold $\tau=0.72$ from Table~\ref{tab:weights}. We also report
+threshold sensitivity separately to distinguish fixed-threshold evaluation from
+threshold-tuned behavior.
 
-Evaluation metrics include overall accuracy, balanced accuracy, malicious-class
-precision, recall, and F1, together with per-class confusion matrix counts (TN, FP,
-FN, TP). Because the class distribution is nearly balanced at the package level in
-this corpus, overall accuracy and balanced accuracy are close in practice; balanced
-accuracy is nevertheless reported because real-world package streams are typically
-highly imbalanced. McNemar's test on paired package predictions is appropriate for
-assessing whether observed error reductions are statistically significant and is
-recommended for formal validation.
+Metrics include overall accuracy, balanced accuracy, malicious-class precision,
+recall, and F1, together with confusion matrix counts (TN, FP, FN, TP). Because the
+sample is exactly balanced at package level, accuracy and balanced accuracy are equal
+in this experiment. McNemar's exact test is used for paired comparisons between the
+baseline and \rcpaa{} predictions on the same 1,000 packages.
 
 \begin{table}[t]
 \centering
-\caption{Package-level results on the extended D2-style dataset.}
+\caption{Package-level results on the 1/10 balanced full-package evaluation subset.}
 \label{tab:main-results}
 \tiny
 \setlength{\tabcolsep}{2pt}
@@ -482,136 +482,136 @@ recommended for formal validation.
 \toprule
 Method & Acc. & Bal.\,Acc. & Prec. & Rec. & F1 & TN & FP & FN & TP \\
 \midrule
-LAMPS any-file    & 0.9170 & 0.9171 & 0.8996 & 0.9380 & 0.9184
-                  & 233 & 27 & 16 & 242 \\
-\rcpaa{} v1       & 0.9305 & 0.9305 & 0.9237 & 0.9380 & 0.9308
-                  & 240 & 20 & 16 & 242 \\
-\rcpaa{} v2       & \textbf{0.9479} & \textbf{0.9478} & \textbf{0.9565}
-                  & 0.9380 & \textbf{0.9472}
-                  & \textbf{249} & \textbf{11} & 16 & 242 \\
+LAMPS any-file       & 0.921 & 0.921 & 0.934 & 0.906 & 0.920 & 468 & 32 & 47 & 453 \\
+Raw max @0.50        & 0.921 & 0.921 & 0.934 & 0.906 & 0.920 & 468 & 32 & 47 & 453 \\
+Average @0.50        & 0.930 & 0.930 & \textbf{1.000} & 0.860 & 0.925 & \textbf{500} & \textbf{0} & 70 & 430 \\
+Majority voting      & 0.899 & 0.899 & \textbf{1.000} & 0.798 & 0.888 & \textbf{500} & \textbf{0} & 101 & 399 \\
+\rcpaa{} @0.72       & \textbf{0.931} & \textbf{0.931} & 0.954 & \textbf{0.906} & \textbf{0.929} & 478 & 22 & \textbf{47} & \textbf{453} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \subsection{Main Results}
-Table~\ref{tab:main-results} presents package-level results. \rcpaa{} v2 improves
-overall accuracy from 0.9170 to 0.9479 and balanced accuracy from 0.9171 to 0.9478.
-The principal gain is in precision: malicious-class precision increases from 0.8996 to
-0.9565, and F1 improves from 0.9184 to 0.9472. Crucially, recall remains unchanged
-at 0.9380, with identical counts of 242 true positives and 16 false negatives.
-\rcpaa{} therefore does not detect additional malicious packages in this evaluation;
-instead, it suppresses false alarms. False positives are reduced from 27 to 11, a
-decrease of approximately 59.3\%.
+Table~\ref{tab:main-results} presents package-level results. At the fixed paper
+threshold $\tau=0.72$, \rcpaa{} improves accuracy from 0.921 to 0.931 and improves
+malicious-class F1 from 0.9198 to 0.9292 relative to LAMPS any-file aggregation.
+The main improvement is precision: malicious-class precision increases from 0.9340 to
+0.9537 while recall remains unchanged at 0.9060. The confusion matrices show the
+mechanism directly: true positives remain 453 and false negatives remain 47, while
+false positives decrease from 32 to 22. Thus, \rcpaa{} does not recover additional
+malicious packages in this fixed-threshold run; it reduces false alarms caused by
+benign high-scoring files.
 
-This outcome is consistent with the intended design of risk-calibrated aggregation.
-The baseline system is already conservative enough to identify the same malicious
-packages, but its any-file rule causes it to over-report benign packages that contain
-high-scoring peripheral files. By applying path-based, role-based, and contextual
-penalties, \rcpaa{} prevents files in test suites, documentation examples, generated
-parser resources, and development tooling from dominating the final package verdict.
-
-\subsection{Implementation Variants}
-Two implementation variants were developed. Version~1 introduced the basic calibrated
-scoring scheme and reduced false positives from 27 to 20. Error analysis, however,
-revealed that import-risk propagation was too permissive: treating \texttt{\_\_init\_\_.py}
-as a strong entrypoint caused many benign modules in large packages to inherit elevated
-risk scores. Version~2 accordingly restricts propagation to true installation and
-execution entrypoints, reduces the \texttt{\_\_init\_\_.py} risk bonus, strengthens
-benign-context penalties for test suites and generated resources, and introduces an
-adaptive package-size penalty for non-critical files. Table~\ref{tab:variants}
-summarizes the principal refinements.
+The comparison with ordinary MIL pooling clarifies the effect of calibration. Raw max
+pooling is identical to the original any-file policy because both use the maximum
+uncalibrated file score. Average pooling and majority voting eliminate false positives
+at threshold 0.50, but they do so by suppressing sparse malicious evidence and reducing
+malicious recall to 0.860 and 0.798, respectively. \rcpaa{} occupies the intended
+operating point: it preserves the recall of max pooling while reducing false positives
+through context-aware penalties.
 
 \begin{table}[t]
 \centering
-\caption{Principal changes from \rcpaa{} v1 to v2.}
-\label{tab:variants}
-\scriptsize
-\begin{tabular}{p{0.28\linewidth}p{0.62\linewidth}}
-\toprule
-Component & v2 refinement \\
-\midrule
-Import boost     & Risk propagation restricted to true installation entrypoints
-                   (installer and build scripts). \\
-File role        & \texttt{\_\_init\_\_.py} receives a reduced bonus relative to
-                   \texttt{setup.py}. \\
-Benign paths     & Strengthened penalties for test suites, examples, tutorials,
-                   development tooling, and benchmarks. \\
-Generated data   & Added penalties for fixtures, resource files, generated parser
-                   outputs, and lookup tables. \\
-Large packages   & Stronger penalty for non-critical files that scales with
-                   package size. \\
-Small packages   & A modest rescue bonus for small packages exhibiting clear
-                   suspicious behavior in critical files. \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The progression from v1 to v2 illustrates that effective calibration requires not only
-the introduction of risk bonuses but, more importantly, the narrowing of propagation
-scope and the strengthening of benign-context penalties. These two adjustments directly
-address the statistical failure mode of any-file aggregation.
-
-\subsection{Error Analysis}
-The 16 false negatives remain unchanged across all three configurations, indicating
-that the missed malicious packages are not primarily attributable to aggregation errors.
-In these cases, the file-level classifier likely assigned low confidence scores to the
-relevant files, the payload-containing file may have been filtered during extraction,
-or the malicious behavior relies on static indicators that are absent or ambiguous.
-Addressing such cases would likely require improvements to file-level classification,
-more complete file extraction, or the incorporation of dynamic execution evidence.
-
-The false-positive reduction from 27 to 11 is more informative for the purposes of this
-evaluation. Manual inspection of corrected predictions indicates that many of the
-reclaimed benign packages contained high-scoring files located in test suites,
-documentation example scripts, generated parser resource files, or development tooling
-directories. These files often contain operations that resemble malicious behavior in
-isolation---for example, invoking \texttt{subprocess} within a test harness---but they
-do not lie on any installation-time execution path.
-
-The 11 remaining false positives reveal the inherent difficulty of purely static
-context analysis. Several of these benign packages legitimately perform operations that
-resemble installer malware, such as downloading platform-specific binaries or invoking
-shell commands to compile native extensions. Distinguishing such behavior from
-malicious installation logic using static context alone is challenging and justifies
-treating \rcpaa{} as a calibration layer rather than a definitive resolver of
-package-level intent.
-
-\subsection{Ablation Plan}
-Table~\ref{tab:ablation} presents the recommended ablation structure. The values shown
-are illustrative placeholders to be replaced by finalized experimental runs. The
-purpose of this structure is to determine whether each scoring component contributes
-independently, with particular interest in the marginal effect of benign-context
-penalties and entrypoint-restricted risk propagation.
-
-\begin{table}[t]
-\centering
-\caption{Recommended ablation structure. Values are illustrative and should be
-replaced after final experimental runs.}
+\caption{Cumulative ablation results for \rcpaa{} at fixed threshold $\tau=0.72$.}
 \label{tab:ablation}
 \scriptsize
-\begin{tabular}{lcccc}
+\begin{tabular}{lccccc}
 \toprule
-Configuration & Acc. & Prec. & Rec. & F1 \\
+Configuration & Acc. & Prec. & Rec. & F1 & FP \\
 \midrule
-Raw max pooling       & 0.917 & 0.900 & 0.938 & 0.918 \\
-$+$ critical role     & 0.921 & 0.907 & 0.938 & 0.922 \\
-$+$ suspicious behavior & 0.926 & 0.916 & 0.938 & 0.927 \\
-$+$ entrypoint import  & 0.931 & 0.924 & 0.938 & 0.931 \\
-$+$ benign context     & 0.942 & 0.945 & 0.938 & 0.941 \\
-Full \rcpaa{}         & 0.948 & 0.957 & 0.938 & 0.947 \\
+\codebert{} max only        & 0.921 & 0.934 & 0.906 & 0.920 & 32 \\
+$+$ critical file bonus     & 0.923 & 0.938 & 0.906 & 0.922 & 30 \\
+$+$ behavior bonus          & 0.923 & 0.938 & 0.906 & 0.922 & 30 \\
+$+$ cross-file import bonus & 0.923 & 0.938 & 0.906 & 0.922 & 30 \\
+$+$ context/low-conf penalty & \textbf{0.931} & \textbf{0.954} & 0.906 & \textbf{0.929} & \textbf{22} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+\subsection{Component Ablation}
+Table~\ref{tab:ablation} reports cumulative ablation results. Adding critical-file
+roles reduces false positives from 32 to 30 and improves F1 from 0.9198 to 0.9217.
+On this subset, behavior and cross-file import bonuses do not change aggregate metrics
+after the critical-file bonus is active. The largest marginal gain comes from the
+context and low-confidence penalty block, which further reduces false positives from
+30 to 22 and increases F1 to 0.9292. This supports the central design claim: the main
+benefit of \rcpaa{} is not merely adding more suspicious indicators, but preventing
+benign-context files from dominating package-level max pooling.
+
+\begin{table}[t]
+\centering
+\caption{Subgroup performance by number of filtered files per package.}
+\label{tab:subgroups}
+\tiny
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccc}
+\toprule
+Filtered files & Packages & Acc. baseline & Acc. \rcpaa{} & FP baseline & FP \rcpaa{} \\
+\midrule
+1 file        & 355 & 1.000 & 1.000 & 0  & 0 \\
+2--5 files    & 306 & 0.869 & 0.869 & 1  & 1 \\
+6--20 files   & 178 & 0.933 & 0.938 & 8  & 7 \\
+21--50 files  & 75  & 0.840 & 0.893 & 10 & 6 \\
+$>$50 files   & 86  & 0.826 & 0.884 & 13 & 8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Subgroup and Error Analysis}
+Table~\ref{tab:subgroups} shows that the improvement is concentrated in larger
+packages. Single-file packages are already solved by the file-level classifier and
+show no room for aggregation improvement. Packages with 21--50 retained files gain
+5.3 accuracy points and reduce false positives from 10 to 6. Packages with more than
+50 retained files gain 5.8 accuracy points and reduce false positives from 13 to 8.
+This pattern is consistent with the failure mode of any-file aggregation: the more
+files a benign package contains, the more opportunities there are for a peripheral
+test, example, generated resource, or development tool file to exceed the raw max
+threshold.
+
+Across the full 1,000-package subset, the baseline produces 79 errors: 32 false
+positives and 47 false negatives. \rcpaa{} produces 69 errors: 22 false positives and
+the same 47 false negatives. The unchanged false-negative count indicates that the
+remaining misses are not primarily aggregation failures. They are more likely caused
+by low \codebert{} confidence on the payload file, extraction filtering that removed
+or deprioritized the decisive file, or malicious behavior that is weakly represented
+by the static indicators used here.
+
 \subsection{Threshold Sensitivity and Statistical Testing}
-The decision threshold $\tau$ governs the precision-recall tradeoff. Lowering $\tau$
-increases sensitivity at the cost of additional false positives; raising $\tau$ reduces
-false positives at the cost of additional false negatives. To guard against threshold
-overfitting, future evaluations should tune $\tau$ along with indicator weights on a
-dedicated validation split or through $k$-fold cross-validation, then report final
-metrics on a held-out test partition. Because LAMPS and \rcpaa{} produce paired
-predictions for the same packages, McNemar's test is the appropriate procedure for
-assessing whether the observed reduction in prediction error is statistically significant.
+Table~\ref{tab:thresholds} reports the best threshold-sweep results by malicious-class
+F1. For \rcpaa{}, the best threshold in the sweep is 0.95, yielding accuracy 0.938,
+precision 0.9720, recall 0.9020, and F1 0.9357. This tuned operating point further
+reduces false positives from 22 to 13, but it increases false negatives from 47 to 49.
+Average pooling is a strong threshold-tuned baseline on this subset: at threshold 0.15,
+it reaches accuracy 0.972 and F1 0.9717. This result should not be conflated with the
+fixed-threshold comparison in Table~\ref{tab:main-results}; rather, it indicates that
+future work should combine context calibration with validation-set threshold selection.
+
+\begin{table}[t]
+\centering
+\caption{Best threshold-sweep results by malicious-class F1.}
+\label{tab:thresholds}
+\tiny
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccccc}
+\toprule
+Score & $\tau$ & Acc. & Prec. & Rec. & F1 & FP/FN \\
+\midrule
+Raw max      & 0.90 & 0.928 & 0.948 & 0.906 & 0.926 & 25/47 \\
+Average      & 0.15 & \textbf{0.972} & \textbf{0.982} & \textbf{0.962} & \textbf{0.972} & \textbf{9}/19 \\
+\rcpaa{}     & 0.95 & 0.938 & 0.972 & 0.902 & 0.936 & 13/49 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+McNemar's exact test confirms that the paired improvement from LAMPS any-file to
+\rcpaa{} at the fixed paper threshold is statistically significant. There are 10
+packages that the baseline misclassifies and \rcpaa{} corrects, and no packages that
+the baseline classifies correctly but \rcpaa{} misclassifies. The resulting exact
+$p$-value is 0.001953. The same paired result holds for raw max pooling because it is
+identical to the any-file rule at threshold 0.50. The comparison between average
+pooling at threshold 0.50 and \rcpaa{} is not significant ($p=1.0$), reflecting the
+different precision-recall tradeoff of average pooling rather than a consistent paired
+dominance relation.
 
 
 \section{Discussion}
@@ -671,10 +671,12 @@ the missed detection. Second, the system performs no dynamic execution, and ther
 cannot identify payloads that are activated only under specific runtime conditions or by
 remote triggers. Third, the current indicator weights are heuristically specified; formal
 validation through grid search or cross-validation on a dedicated held-out partition
-has not yet been performed. Fourth, the evaluated corpus differs from the original LAMPS
-D2 dataset, so results require validation on the original experimental split and on
-fresh temporal PyPI data to assess generalization. Fifth, the current import-relation
-analysis is shallow and may miss recursive import chains (e.g., \texttt{setup.py}
+is only partially explored through the threshold sweep in this study. Fourth, the
+reported experiment is a deterministic 1/10 subset of a 10,000-package full-package
+corpus, so results require validation on the full corpus, the original LAMPS D2 split,
+and fresh temporal PyPI data to assess generalization. Fifth, the current
+import-relation analysis is shallow and may miss recursive import chains (e.g.,
+\texttt{setup.py}
 $\to$ \texttt{a.py} $\to$ \texttt{b.py} $\to$ \texttt{payload.py}), dynamic imports
 via \texttt{importlib}, or data-flow-dependent execution paths.
 
@@ -700,13 +702,12 @@ non-standard directory layouts and adversaries who deliberately place payloads i
 conventionally benign directories could reduce the effectiveness of path-based
 benign-context penalties.
 
-External validity is constrained by the dataset. The evaluated corpus is an extended
-D2-style setting rather than the exact original D2 split, and it contains a nearly
-balanced distribution of benign and malicious packages, whereas real-world package
-streams exhibit substantially higher proportions of benign packages. Construct validity
-is affected by package-level ground truth labels: a malicious package label does not
-imply that every file within it is malicious, and a high file-level risk score should
-not be interpreted as individual file ground truth in the absence of file-level
+External validity is constrained by the dataset. The evaluated subset is sampled from
+a balanced full-package corpus and is not the exact original D2 split, whereas real
+package streams exhibit substantially higher proportions of benign packages. Construct
+validity is affected by package-level ground truth labels: a malicious package label
+does not imply that every file within it is malicious, and a high file-level risk score
+should not be interpreted as individual file ground truth in the absence of file-level
 annotations. For this reason, the evaluation focuses on package-level metrics and
 employs file-level scores only as intermediate evidence within the aggregation procedure.
 
@@ -720,10 +721,11 @@ context-aware scoring procedure that combines \codebert{} malicious confidence w
 file role, suspicious API behavior, installation entrypoint import relations, and
 benign-context penalties. The method is computationally lightweight, operates entirely
 post-classification, and requires neither classifier retraining nor dynamic package
-execution. In an extended D2-style evaluation comprising 518 packages, \rcpaa{} reduces
-false positives from 27 to 11 and improves F1 from 0.9184 to 0.9472 while preserving
-recall at 0.9380. These results indicate that calibrating the aggregation stage alone
-can make LAMPS-style detection systems more precise, interpretable, and practically
+execution. On a deterministic balanced 1/10 full-package subset comprising 1,000
+packages and 25,511 filtered Python files, \rcpaa{} reduces false positives from 32
+to 22 and improves malicious-class F1 from 0.9198 to 0.9292 while preserving recall
+at 0.9060. These results indicate that calibrating the aggregation stage alone can
+make LAMPS-style detection systems more precise, interpretable, and practically
 deployable for multi-file package screening, without requiring changes to the underlying
 file-level classifier.
 
